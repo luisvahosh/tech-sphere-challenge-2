@@ -1,0 +1,38 @@
+# Despliegue en VPS: API + consola detras de un proxy inverso (ver DEPLOY.md).
+# Los puertos se publican solo en 127.0.0.1: el unico acceso publico es por
+# el proxy inverso (Nginx), que es quien pone HTTPS.
+services:
+  api:
+    build: .
+    image: merian-postop:latest
+    container_name: merian-api
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - merian_data:/app/data
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  console:
+    build: .
+    image: merian-postop:latest
+    container_name: merian-console
+    restart: unless-stopped
+    command: ["streamlit", "run", "console/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    environment:
+      # La consola habla con la API por la red interna de Docker, no por internet
+      API_BASE_URL: http://api:8000
+    ports:
+      - "127.0.0.1:${CONSOLE_PORT:-8501}:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  merian_data:
