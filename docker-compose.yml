@@ -1,17 +1,19 @@
-# Despliegue en VPS: API + consola detras de un proxy inverso (ver DEPLOY.md).
-# Los puertos se publican solo en 127.0.0.1: el unico acceso publico es por
-# el proxy inverso (Nginx), que es quien pone HTTPS.
+# Despliegue en VPS detras de Nginx Proxy Manager (ver DEPLOY.md).
+# No se publica ningun puerto en el host: NPM llega a los contenedores por
+# su red Docker, asi no hay choques con otros proyectos del servidor.
+# Nombres con prefijo ts2- para no colisionar con tech-sphere-challenge (v1).
+name: tech-sphere-2
+
 services:
   api:
     build: .
-    image: merian-postop:latest
-    container_name: merian-api
+    image: tech-sphere-2:latest
+    container_name: ts2-postop-api
     restart: unless-stopped
     env_file: .env
     volumes:
-      - merian_data:/app/data
-    ports:
-      - "127.0.0.1:${API_PORT:-8000}:8000"
+      - postop_data:/app/data
+    networks: [interna, npm]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
       interval: 30s
@@ -21,18 +23,25 @@ services:
 
   console:
     build: .
-    image: merian-postop:latest
-    container_name: merian-console
+    image: tech-sphere-2:latest
+    container_name: ts2-postop-console
     restart: unless-stopped
-    command: ["streamlit", "run", "console/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    command: ["streamlit", "run", "console/app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.baseUrlPath=consola"]
     environment:
-      # La consola habla con la API por la red interna de Docker, no por internet
-      API_BASE_URL: http://api:8000
-    ports:
-      - "127.0.0.1:${CONSOLE_PORT:-8501}:8501"
+      # Nombre de contenedor (unico en el servidor), no "api": en la red de
+      # NPM otro proyecto podria tener tambien un servicio llamado api.
+      API_BASE_URL: http://ts2-postop-api:8000
+      CONSOLE_PASSWORD: ${CONSOLE_PASSWORD:?Define CONSOLE_PASSWORD en .env}
+    networks: [interna, npm]
     depends_on:
       api:
         condition: service_healthy
 
+networks:
+  interna:
+  npm:
+    external: true
+    name: ${NPM_NETWORK:-npm_default}
+
 volumes:
-  merian_data:
+  postop_data:

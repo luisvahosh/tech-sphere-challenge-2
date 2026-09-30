@@ -253,6 +253,12 @@ Respuesta esperada:
 
 ---
 
+## Deploy en VPS con Docker (recomendado)
+
+Ver [DEPLOY.md](./DEPLOY.md): API + consola en contenedores detrás de Nginx Proxy Manager, con datos persistentes en un volumen Docker.
+
+---
+
 ## Deploy en Render (free tier)
 
 > **Limitación crítica del free tier:** Render no persiste el sistema de archivos entre reinicios. `chroma_db/` y `llamadas.db` **se borran con cada deploy o reinicio del servicio**. Después de cada reinicio hay que re-subir los documentos clínicos desde la consola.

@@ -1,3 +1,4 @@
+import hmac
 import os
 from collections import Counter
 
@@ -66,6 +67,22 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# Clave de acceso a la consola: en el servidor la consola queda en internet
+# (mismo dominio que la interfaz del paciente), asi que se protege aqui. Sin
+# CONSOLE_PASSWORD (desarrollo local) no se pide clave.
+CONSOLE_PASSWORD = os.getenv("CONSOLE_PASSWORD", "")
+
+if CONSOLE_PASSWORD and not st.session_state.get("autenticado"):
+    st.title("🩺 Consola de administración")
+    with st.form("login"):
+        clave = st.text_input("Clave de acceso", type="password")
+        if st.form_submit_button("Entrar"):
+            if hmac.compare_digest(clave.encode("utf-8"), CONSOLE_PASSWORD.encode("utf-8")):
+                st.session_state["autenticado"] = True
+                st.rerun()
+            st.error("Clave incorrecta.")
+    st.stop()
 
 st.title("🩺 Consola de administración")
 st.caption(f"Base de conocimiento y seguimiento postoperatorio · Backend: {API_BASE_URL}")

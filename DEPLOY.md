@@ -1,109 +1,114 @@
-# Despliegue en VPS (Hostinger) con Docker + Nginx
+# Despliegue en VPS Hostinger (Docker + Nginx Proxy Manager)
 
-Arquitectura en el servidor:
+Dominio: **https://postoperatorio.learnway.co**
 
 ```
-Internet ──HTTPS──► Nginx (VPS, puertos 80/443)
-                      ├─ api.tu-dominio.com      ─► 127.0.0.1:8000  contenedor merian-api
-                      └─ consola.tu-dominio.com  ─► 127.0.0.1:8501  contenedor merian-console
-                                                         │  (red interna Docker: http://api:8000)
-                                                   volumen merian_data  (chroma_db + llamadas.db)
+Internet ─HTTPS─► Nginx Proxy Manager ──(red Docker de NPM)──┐
+                   postoperatorio.learnway.co                 │
+                     /llamada, /query, /webhook/post-call ──► ts2-postop-api:8000
+                     /consola ──────────────────────────────► ts2-postop-console:8501
+                                                                     │ red "interna"
+                                                          volumen postop_data (chroma_db + llamadas.db)
 ```
 
-Los contenedores solo escuchan en `127.0.0.1`; lo único expuesto a internet es Nginx.
+- Proyecto compose `tech-sphere-2`: contenedores `ts2-postop-*` para no chocar con `tech-sphere-challenge` ni con otros proyectos.
+- No se publican puertos en el host; NPM llega a los contenedores por su red Docker.
 
-## 0. Requisitos en el VPS
+| URL | Uso |
+|---|---|
+| `https://postoperatorio.learnway.co/` | Redirige a `/llamada` |
+| `https://postoperatorio.learnway.co/llamada` | Interfaz del paciente |
+| `https://postoperatorio.learnway.co/consola` | Consola del equipo médico (pide `CONSOLE_PASSWORD`) |
+| `https://postoperatorio.learnway.co/query` | Tool RAG de ElevenLabs |
+| `https://postoperatorio.learnway.co/webhook/post-call` | Webhook post-llamada (firma HMAC) |
+| `/documents`, `/llamadas`, `/docs` | Bloqueadas desde internet (404); la consola las usa por la red interna |
 
-- Docker + plugin compose (`docker compose version`). En Hostinger la plantilla "Ubuntu + Docker" ya lo trae.
-- Dos registros DNS tipo **A** apuntando a la IP del VPS: `api.tu-dominio.com` y `consola.tu-dominio.com` (hPanel → Dominios → DNS).
-- Puertos 80 y 443 abiertos (hPanel → VPS → Firewall, y `ufw` si lo usas).
+## 1. DNS (hPanel de Hostinger)
 
-## 1. Clonar el proyecto
+Dominios → `learnway.co` → DNS: registro **A** `postoperatorio` → IP del VPS.
+Compruébalo con `ping postoperatorio.learnway.co`.
+
+## 2. Clonar en el VPS
 
 ```bash
 cd /opt
-git clone https://github.com/emanuelvahos/tech-sphere-challenge-2.git merian
-cd merian
+git clone https://github.com/luisvahosh/tech-sphere-challenge-2.git
+cd tech-sphere-challenge-2
 ```
 
-> Si el repo es privado, usa un token personal de GitHub o una deploy key SSH.
+> El repo es privado: GitHub pide usuario y, como contraseña, un **token personal**
+> (GitHub → Settings → Developer settings → Personal access tokens → fine-grained,
+> permiso *Contents: Read-only* sobre este repo).
 
-## 2. Variables de entorno
+## 3. Variables de entorno
 
 ```bash
 cp .env.example .env
-nano .env        # NVIDIA_API_KEY, ELEVENLABS_AGENT_ID, ELEVENLABS_WEBHOOK_SECRET...
+nano .env
 chmod 600 .env
 ```
 
-Si los puertos 8000/8501 ya los usa otro contenedor del servidor, agrega al `.env`
-`API_PORT=` y `CONSOLE_PORT=` con otros valores (y ajústalos en la config de Nginx).
+Completa `NVIDIA_API_KEY`, `ELEVENLABS_AGENT_ID`, `ELEVENLABS_WEBHOOK_SECRET`, `CONSOLE_PASSWORD`
+y `NPM_NETWORK`. Para saber la red de NPM:
 
-## 3. Construir y levantar
+```bash
+docker ps --format '{{.Names}}' | grep -i proxy            # nombre del contenedor NPM
+docker inspect <contenedor-npm> -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+```
+
+## 4. Levantar
 
 ```bash
 docker compose up -d --build
-docker compose ps                     # ambos "healthy"/"running"
-curl http://127.0.0.1:8000/health     # {"status":"ok"}
-docker compose logs -f api            # ver logs
+docker compose ps                          # ts2-postop-api "healthy", ts2-postop-console "running"
+docker compose logs -f api
 ```
 
-## 4. Proxy inverso (Nginx + HTTPS)
+Prueba desde NPM que se ven (debe responder `{"status":"ok"}`):
 
 ```bash
-sudo apt install -y nginx certbot python3-certbot-nginx apache2-utils
-
-sudo cp deploy/nginx/merian.conf /etc/nginx/sites-available/merian.conf
-sudo nano /etc/nginx/sites-available/merian.conf     # cambia tu-dominio.com
-sudo ln -s /etc/nginx/sites-available/merian.conf /etc/nginx/sites-enabled/
-
-# Usuario/clave para la consola del equipo médico
-sudo htpasswd -c /etc/nginx/.htpasswd-merian medico
-
-sudo nginx -t && sudo systemctl reload nginx
-
-# Certificados SSL (Let's Encrypt); certbot edita el conf y agrega el 443
-sudo certbot --nginx -d api.tu-dominio.com -d consola.tu-dominio.com
+docker exec <contenedor-npm> curl -s http://ts2-postop-api:8000/health
 ```
 
-> Si en el servidor ya tienes otro proxy (Traefik, Nginx Proxy Manager, Caddy),
-> no instales Nginx: apunta ese proxy a `127.0.0.1:8000` y `127.0.0.1:8501`,
-> activa WebSocket para la consola y replica el filtro de rutas de la API.
+## 5. Proxy Host en Nginx Proxy Manager
 
-## 5. Conectar ElevenLabs
+**Hosts → Proxy Hosts → Add Proxy Host**
 
-En el dashboard del agente:
+- **Details**
+  - Domain Names: `postoperatorio.learnway.co`
+  - Scheme: `http` · Forward Hostname: `ts2-postop-api` · Forward Port: `8000`
+  - ✅ Block Common Exploits · ✅ Websockets Support
+- **SSL**
+  - Request a new SSL Certificate (Let's Encrypt) · ✅ Force SSL · ✅ HTTP/2
+- **Advanced**
+  - Pega el contenido de [`deploy/npm-advanced.conf`](./deploy/npm-advanced.conf)
 
-- **Tool RAG**: `POST https://api.tu-dominio.com/query`
-- **Webhook post-llamada**: `POST https://api.tu-dominio.com/webhook/post-call`
+No uses Access List en este host: bloquearía al paciente y al webhook de ElevenLabs.
+La consola se protege con su propia clave.
 
-Interfaz del paciente: `https://api.tu-dominio.com/llamada`
-Consola: `https://consola.tu-dominio.com`
+> HTTPS es obligatorio: sin él el navegador no da acceso al micrófono en `/llamada`.
 
-## Qué queda público y qué no
+## 6. ElevenLabs
 
-| Ruta | Público | Motivo |
-|---|---|---|
-| `/llamada`, `/llamada/static/*` | ✅ | Interfaz del paciente |
-| `/query` | ✅ | Tool RAG que invoca ElevenLabs |
-| `/webhook/post-call` | ✅ | Protegido por firma HMAC |
-| `/health` | ✅ | Monitoreo |
-| `/documents`, `/llamadas`, `/docs` | ❌ 404 | Gestión RAG y datos de pacientes: solo vía consola |
+En el agente:
 
-## Actualizar a una nueva versión
+- Tool RAG: `POST https://postoperatorio.learnway.co/query`
+- Webhook post-llamada: `POST https://postoperatorio.learnway.co/webhook/post-call`
+
+## Actualizar
 
 ```bash
-cd /opt/merian
+cd /opt/tech-sphere-challenge-2
 git pull
 docker compose up -d --build
 docker image prune -f
 ```
 
-Los documentos cargados y el historial de llamadas viven en el volumen `merian_data` y sobreviven a reinicios y redeploys.
+Documentos e historial viven en el volumen `tech-sphere-2_postop_data` y sobreviven a redeploys.
 
-## Backup del volumen
+## Backup
 
 ```bash
-docker run --rm -v merian_merian_data:/data -v "$PWD":/backup alpine \
-  tar czf /backup/merian-data-$(date +%F).tgz -C /data .
+docker run --rm -v tech-sphere-2_postop_data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/postop-data-$(date +%F).tgz -C /data .
 ```
